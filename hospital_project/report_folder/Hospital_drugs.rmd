@@ -1,0 +1,199 @@
+---
+title: "Hospital_fdrugs"
+author: "Anton Muromstev"
+date: "10/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = '../data_folder')
+```
+
+## Introduction
+
+Clinical trial data was collected in form of multiple csv files. Our aim is to 
+identify whether drugs in this clinical trial have statistically signidicant
+effect
+
+
+### Libraries required 
+
+If you are working manually please connect libraries in order listed below
+
+```{r}
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(ggplot2)) install.packages("ggplot2")
+if(!require(ggpubr)) install.packages("ggpubr")
+if(!require(nortest)) install.packages("nortest")
+if(!require(car)) install.packages("car")
+if(!require(tableHTML)) install.packages("tableHTML")
+library(dplyr)
+library(ggplot2)
+library(nortest)
+library(ggpubr)
+library(car)
+library(tableHTML)
+```
+
+
+### Fucntion to bind csv files
+
+At first we created function which receives a path to folder and extension of 
+files in folder. Then it binds all the files with given expenction
+
+```{r}
+results_bind <- function(pathway, extenction) {
+  
+  file_names <- list.files(path = pathway, pattern = paste0("*.", extenction))
+  if (extenction == "csv") {
+    frames <- lapply(file_names, read.csv, na.strings = c("NA", ""))
+  } else if (extenction == "tsv") {
+    frames <- lapply(file_names, read.table, sep = '\t', 
+                     header = TRUE, na.strings = c("NA", ""))
+  }
+  frames_binded <- do.call("rbind", frames)
+  final_frame <- as_data_frame(frames_binded)
+  return(final_frame)
+}
+```
+
+This function was used to bind csv files collected from clinical trial
+
+```{r}
+raw_frame <- results_bind("./","csv")
+```
+
+### Data preprocessing
+
+We firstly performed structure analysis of created dataframe
+
+```{r}
+str(raw_frame)
+```
+
+We replaced NAs in is_relapse to 0 and made some corrections in age and gender 
+variables. Then gender and drug_type were factorised and age type was turned into
+integer. Thus **filtered_frame (filt_frame)** was created
+
+```{r}
+raw_frame$gender[raw_frame$gender == "malle"] <- "male"
+raw_frame$age[raw_frame$age == "thirty-one"] <- "31"
+raw_frame$is_relapse[is.na(raw_frame$is_relapse)] <- 0
+
+filt_frame <- filter(raw_frame, age %in% c(1:150)) %>% mutate(gender = as.factor(gender),
+                                                        drug_type = as.factor(drug_type),
+                                                        age = as.integer(age))
+```
+
+Final structure of the dataframe
+
+```{r}
+str(filt_frame)
+```
+
+### Normality testing
+
+There are 2 variables in frame that may have normal distribution. They are: age 
+and days_in_hospital. We plotted histograms and qqplots at first to check normality.
+As dataframe has 194 observations, we performed Shapiro-Francia test (sf.test)
+
+```{r}
+hist(filt_frame$age) 
+qqnorm(filt_frame$age)
+qqline(filt_frame$age)
+sf.test(filt_frame$age)
+
+hist(filt_frame$days_in_hospital) 
+qqnorm(filt_frame$days_in_hospital)
+qqline(filt_frame$days_in_hospital)
+sf.test(filt_frame$days_in_hospital) 
+```
+
+According to the tests, age and days_in_hospital are ditributed normally, but 
+tests shwow p-values close to 0.05. Nevetheless, we still can perform t-tests 
+as number of observations is 194 >> 50.
+
+### EDA
+
+We firsty checked if age and days_in_hospital are connected
+
+```{r}
+cor(filt_frame$age, filt_frame$days_in_hospital, method = "pearson")
+cor.test(filt_frame$age, filt_frame$days_in_hospital)
+```
+It is not surprising that these variables are not correlated as age range is 14 
+with maximum = 37 and minimum = 14
+
+Then we checked whether gender influence days_in_hospital
+
+```{r}
+ggplot(filt_frame, aes(x = gender, y = days_in_hospital))+
+  geom_boxplot(fill = "cadetblue1")+
+  labs(title = "Days in hospital by gender")
+```
+
+It seems that gender does not affect days_in_hospital
+
+Then days_in_hospital and drug_type connections were checked
+
+```{r}
+ggplot(filt_frame, aes(x = drug_type, y = days_in_hospital))+
+  geom_boxplot(fill = "cadetblue1")+
+  labs(title = "Days in hospital by Drug type")
+```
+
+Potencially old drug type may be more effective
+
+Finally we look at relations between drug_type and gender connected with 
+days_in_hospital
+
+```{r}
+ggplot(filt_frame, aes(x = drug_type, y = days_in_hospital, fill = gender))+
+  geom_boxplot()+
+  labs(title = "Days in hospital by gender and drug type")
+```
+
+It seem that drug (New_type_2) works in a gender-specific manner and cure women
+more effectively
+
+### days_in_hospital variable basic analysis
+
+we calculated mean and sd of days_in_hospital variable
+
+```{r}
+mean(filt_frame$days_in_hospital)
+sd(filt_frame$days_in_hospital)
+```
+
+### Testing whether days_in_hospital is different for females with different types
+
+According to EDA results it make sense to perform t-test for women cured with 
+placebo and drug type = New_type2
+
+```{r}
+New_type2 <- filter(filt_frame, gender == "female", drug_type == "New_type_2")
+Placebo <- filter(filt_frame, gender == "female", drug_type == "Placebo")
+Result <- filter(filt_frame, gender == "female", drug_type %in% c("Placebo", "New_type_2"))
+t.test(New_type2$days_in_hospital, Placebo$days_in_hospital)
+
+ggplot(Result, aes(x = drug_type, y = days_in_hospital))+
+  geom_boxplot(fill = "cadetblue1")+
+  stat_compare_means(method = "t.test", comparisons = list(c("Placebo", "New_type_2")))+
+  labs(title = "Days in hospital for women \npacients depending on the drug type",
+     caption = "t-test performed")
+```
+
+According to the test drug = New_type_2 significantly lower days_in hospital
+for women
+
+### Perform Anova for drug_type and days_in_hospital
+
+```{r}
+An <- lm(days_in_hospital ~ drug_type + gender + drug_type:gender, data = filt_frame)
+tableHTML(round(Anova(An), digits = 3))
+```
+drug_type and gender are connected. Additionally it turned out that drug_type is statittically significant itself too.
+
+
+
